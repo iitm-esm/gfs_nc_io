@@ -2,7 +2,7 @@ module gfs_diag_manager_mod
 
     use fms, only: handle_error=>mpp_error, FATAL, WARNING, NOTE, &
                     mpp_pe, mpp_root_pe, fms_init, mpp_gather, mpp_alltoall, &
-                    mpp_get_compute_domain, diag_axis_add_attribute
+                    mpp_get_compute_domain, diag_axis_add_attribute, mpp_max
     use fms, only: time_type, print_date, set_date, set_time, print_time
     use fms, only: diag_manager_init, diag_manager_end, diag_send_complete
     use fms, only: diag_axis_init, register_static_field, diag_manager_set_time_end
@@ -48,17 +48,17 @@ module gfs_diag_manager_mod
     public :: gfs_diag_manager_init, gfs_diag_manager_end, register_var, &
              gfs_send_data, register_static, gfs_diag_send_complete, set_gfs_diag_manager_time
 
-   interface gfs_send_data
-      module procedure update_opdata_2d_o
-      module procedure update_opdata_3d_o
-      module procedure update_opdata_2d
-      module procedure update_opdata_3d
-   end interface gfs_send_data
+    interface gfs_send_data
+       module procedure update_opdata_2d_o
+       module procedure update_opdata_3d_o
+       module procedure update_opdata_2d
+       module procedure update_opdata_3d
+    end interface gfs_send_data
   
   
-   contains
+    contains
 
-   subroutine write_diag_post_nml(startdate, enddate, deltim, calendar_type)
+    subroutine write_diag_post_nml(startdate, enddate, deltim, calendar_type)
       integer, intent(in) :: startdate(6), enddate(6), deltim, calendar_type
 
       integer :: ounit
@@ -96,16 +96,18 @@ module gfs_diag_manager_mod
 
         real :: xlonf(size(xlon,1)), dlon
 
-        integer :: i, lev_id, id, k, itm(6)
-        integer :: tmp(size(xlat,2)+1), nk, ounit, lonsperlat(size(xlat,2))
+        integer :: i, lev_id, id, k, itm(6), j
+        integer :: latInd(size(xlat,2)), nk, ounit, lonsperlat(size(xlat,2))
         Character (len=32) :: tmpc
         logical :: used
         type(axistype) :: ak_axis, bk_axis
         real :: rtmp(size(ak5,1))
         TYPE(ESMF_Time) :: Time
         integer, allocatable :: nlat_in_pes(:) 
-        integer :: nlat_this_pe(1), js, je, is, ie
+        integer :: nlat_this_pe(1), js, je, is, ie, max_nlat
         real, allocatable :: xlatf(:)
+        integer, dimension(size(global_lats_r,1)) :: latIndGlobal, lonsperlatGlobal
+        integer, allocatable :: itmpLocal(:), itmp(:)
 
         if (icolor/=2) then 
           call fms_init(localcomm=mc_comp, alt_input_nml_path='gfs_input.nml')
@@ -159,23 +161,50 @@ module gfs_diag_manager_mod
 
         call diag_manager_init()
 
-        tmp(1)=latr
         total_eles = 0
         do i=1,lats_node_r
-           tmp(i+1)=global_lats_r(ipt_lats_node_r-1+i)
-           total_eles = total_eles + lonsperlar(tmp(i+1))
-           lonsperlat(i) = lonsperlar(tmp(i+1))
+           latInd(i)=global_lats_r(ipt_lats_node_r-1+i)
+           total_eles = total_eles + lonsperlar(latInd(i))
+           lonsperlat(i) = lonsperlar(latInd(i))
         enddo
+
+        max_nlat = lats_node_r
+        call mpp_max(max_nlat)
+        allocate( itmp(max_nlat*mpp_npes()) )
+        allocate( itmpLocal(max_nlat) )
+        
+        itmpLocal = -999
+        itmpLocal(1:size(latInd,1)) = latInd(:)
+        call mpp_gather(itmpLocal,itmp)
+        call mpp_broadcast(itmp,size(itmp,1),mpp_root_pe())
+
+        j = 1
+        do i = 1, size(itmp)
+            if (itmp(i)==-999) cycle
+            latIndGlobal(j) = itmp(i)
+            j = j + 1
+        end do 
+
+        itmpLocal = -999
+        itmpLocal(1:size(lonsperlat,1)) = lonsperlat(:)
+        call mpp_gather(itmpLocal,itmp)
+        call mpp_broadcast(itmp,size(itmp,1),mpp_root_pe())
+        j = 1
+        do i = 1, size(itmp)
+            if (itmp(i)==-999) cycle
+            lonsperlatGlobal(j) = itmp(i)
+            j = j + 1
+        end do 
 
         lon_id = diag_axis_init(name='lon', data=xlonf(:)*RAD_TO_DEG, &
                    units='degrees_east' , cart_name='X', long_name='longitude', domain2=domain)
-        call diag_axis_add_attribute(lon_id, 'lonsperlat', lonsperlat)
+        call diag_axis_add_attribute(lon_id, 'lonsperlat', lonsperlatGlobal)
         lat_id = diag_axis_init(name='lat', data=xlatf(:)*RAD_TO_DEG, &
                    units='degrees_north' , cart_name='Y', long_name='latitude', domain2=domain)
-        call diag_axis_add_attribute(lat_id, 'decomp_gfs', tmp)
+        call diag_axis_add_attribute(lat_id, 'decomp_gfs', latIndGlobal)
+
 
         allocate(nlevs(2,max_nlevs))
-
 
         call set_gfs_diag_manager_time(clock)
         diag_active = .false. ! this is needed because of initial filtering in gfs
@@ -187,7 +216,7 @@ module gfs_diag_manager_mod
 
         time_step = set_time(dt_sec)
 
-        deallocate(xlatf, nlat_in_pes)
+        deallocate(xlatf, nlat_in_pes, itmp, itmpLocal)
 
     end subroutine gfs_diag_manager_init
 
