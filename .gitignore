@@ -1,0 +1,11 @@
+*.mod
+*.o
+*.a
+*.exe
+*.i90
+exec
+work
+WORK
+data
+.exec_path
+.env
