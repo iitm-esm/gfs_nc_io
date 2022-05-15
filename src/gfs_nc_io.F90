@@ -1,17 +1,18 @@
-module gfs_diag_manager_mod
+module gfs_nc_io_mod
 
     use fms, only: handle_error=>mpp_error, FATAL, WARNING, NOTE, &
-                    mpp_pe, mpp_root_pe, fms_init, mpp_gather, mpp_alltoall, &
-                    mpp_get_compute_domain, diag_axis_add_attribute, mpp_max
-    use fms, only: time_type, print_date, set_date, set_time, print_time
-    use fms, only: diag_manager_init, diag_manager_end, diag_send_complete
-    use fms, only: diag_axis_init, register_static_field, diag_manager_set_time_end
-    use fms, only: register_diag_field, send_data, assignment(=)
-    use fms, only: set_calendar_type, GREGORIAN, set_date, time_type, date_to_string
-    use fms, only: domain2d, mpp_define_domains, mpp_npes, mpp_sync, mpp_broadcast
+            mpp_pe, mpp_root_pe, fms_init, mpp_gather, mpp_alltoall, &
+            mpp_get_compute_domain, diag_axis_add_attribute, mpp_max, &
+            time_type, print_date, set_date, set_time, print_time, &
+            diag_manager_init, diag_manager_end, diag_send_complete, &
+            diag_axis_init, register_static_field, diag_manager_set_time_end, &
+            register_diag_field, send_data, assignment(=), data_override_init, &
+            set_calendar_type, GREGORIAN, set_date, time_type, date_to_string, &
+            domain2d, mpp_define_domains, mpp_npes, mpp_sync, mpp_broadcast, &
+            data_override
     
     use mpp_io_mod, only: mpp_open, mpp_close, mpp_write_meta, MPP_OVERWR, MPP_SINGLE, &
-                          axistype, MPP_NETCDF, mpp_write, MPP_ASCII
+            axistype, MPP_NETCDF, mpp_write, MPP_ASCII
 
     use constants_mod,    only: RAD_TO_DEG, PI
 
@@ -20,8 +21,9 @@ module gfs_diag_manager_mod
     use mpi_def, only: icolor, mc_comp, mc_io
     use layout1, only : ipt_lats_node_r
     use coordinate_def, only: ak5, bk5  
-    
+
     implicit none
+
     private
 
     integer, parameter :: max_fields = 100
@@ -37,7 +39,7 @@ module gfs_diag_manager_mod
 
     integer :: max_nlevs=100, n_nlevs=0, total_eles=0, n_fields=0
 
-    integer :: lonr, lats_node_r, latr
+    integer :: nlonGlobal, nlatLocal, nlatGlobal
     integer :: lon_id, lat_id
 
     integer, allocatable :: nlevs(:,:)
@@ -45,18 +47,36 @@ module gfs_diag_manager_mod
 
     logical :: diag_active = .false., gfs_io_pe=.true.
   
-    public :: gfs_diag_manager_init, gfs_diag_manager_end, register_var, &
-             gfs_send_data, register_static, gfs_diag_send_complete, set_gfs_diag_manager_time
+    public :: gfs_nc_io_init, gfs_nc_io_end, gfs_register_diag_field, gfs_send_data, &
+                gfs_register_static_field, gfs_diag_send_complete, set_gfs_nc_io_time, &
+                gfs_data_override
 
     interface gfs_send_data
-       module procedure update_opdata_2d_o
-       module procedure update_opdata_3d_o
-       module procedure update_opdata_2d
-       module procedure update_opdata_3d
+       module procedure update_opdata_2d_o, update_opdata_3d_o, update_opdata_2d, &
+                    update_opdata_3d
     end interface gfs_send_data
+
+    interface gfs_data_override
+        module procedure gfs_data_override0d, gfs_data_override2d, gfs_data_override3d, &
+                    gfs_data_override2d_o, gfs_data_override3d_o
+    end interface gfs_data_override
   
   
     contains
+
+    subroutine set_domain()
+        integer, allocatable :: nlat_in_pes(:)
+
+        allocate(nlat_in_pes(mpp_npes())) 
+
+        call mpp_gather([nlatLocal],nlat_in_pes)
+        call mpp_broadcast(nlat_in_pes,size(nlat_in_pes,1),mpp_root_pe())
+
+        call mpp_define_domains([1,nlonGlobal,1,nlatGlobal], [1, mpp_npes()], domain, yextent=nlat_in_pes)
+
+        deallocate(nlat_in_pes)
+    end subroutine set_domain
+
 
     subroutine write_diag_post_nml(startdate, enddate, deltim, calendar_type)
       integer, intent(in) :: startdate(6), enddate(6), deltim, calendar_type
@@ -75,20 +95,23 @@ module gfs_diag_manager_mod
     end subroutine write_diag_post_nml
 
 
-    subroutine set_gfs_diag_manager_time(clock)
+    subroutine set_gfs_nc_io_time(clock)
         TYPE(ESMF_Clock), intent(in) :: clock
 
         TYPE(ESMF_Time) :: Time
         integer :: itm(6)
 
+        if (gfs_io_pe) return 
+        
         CALL ESMF_ClockGet(clock, currTime = Time)
         CALL ESMF_TimeGet (Time, yy=itm(1), mm=itm(2), dd=itm(3), h=itm(4), m=itm(5), s=itm(6))
         currtime = set_date(itm(1),itm(2),itm(3),itm(4),itm(5),itm(6))
 
         diag_active = .true. 
-    end subroutine set_gfs_diag_manager_time
+    end subroutine set_gfs_nc_io_time
 
-    subroutine gfs_diag_manager_init(xlat, xlon, global_lats_r, lonsperlar, clock, dt_sec)
+
+    subroutine gfs_nc_io_init(xlat, xlon, global_lats_r, lonsperlar, clock, dt_sec)
         real, intent(in) :: xlat(:,:), xlon(:,:)
         integer, intent(in) :: global_lats_r(:), lonsperlar(:)
         integer, intent(in) :: dt_sec
@@ -103,8 +126,7 @@ module gfs_diag_manager_mod
         type(axistype) :: ak_axis, bk_axis
         real :: rtmp(size(ak5,1))
         TYPE(ESMF_Time) :: Time
-        integer, allocatable :: nlat_in_pes(:) 
-        integer :: nlat_this_pe(1), js, je, is, ie, max_nlat
+        integer :: js, je, is, ie, max_nlat
         real, allocatable :: xlatf(:)
         integer, dimension(size(global_lats_r,1)) :: latIndGlobal, lonsperlatGlobal
         integer, allocatable :: itmpLocal(:), itmp(:)
@@ -119,18 +141,11 @@ module gfs_diag_manager_mod
 
         call set_calendar_type(GREGORIAN)
 
-        lonr = size(xlon,1)
-        lats_node_r = size(xlat,2)
-        latr = size(global_lats_r,1)
+        nlonGlobal = size(xlon,1)
+        nlatLocal = size(xlat,2)
+        nlatGlobal = size(global_lats_r,1)
 
-        nlat_this_pe = lats_node_r
-
-        allocate(nlat_in_pes(mpp_npes())) 
-
-        call mpp_gather(nlat_this_pe,nlat_in_pes)
-        call mpp_broadcast(nlat_in_pes,size(nlat_in_pes,1),mpp_root_pe())
-
-        call mpp_define_domains([1,lonr,1,latr], [1, mpp_npes()], domain, yextent=nlat_in_pes)
+        call set_domain
 
         nk = size(ak5,1)
         if (mpp_pe()==mpp_root_pe()) then
@@ -145,14 +160,14 @@ module gfs_diag_manager_mod
            call mpp_close(ounit)
         endif
 
-        dlon = 2. * PI / lonr
+        dlon = 2. * PI / nlonGlobal
         xlonf = 0.
 
-        do i = 2, lonr
+        do i = 2, nlonGlobal
            xlonf(i) = xlonf(i-1) + dlon
         end do
 
-        allocate(xlatf(latr))
+        allocate(xlatf(nlatGlobal))
         xlatf = -1000.0
 
         call mpp_get_compute_domain(domain, is, ie, js, je)
@@ -162,13 +177,13 @@ module gfs_diag_manager_mod
         call diag_manager_init()
 
         total_eles = 0
-        do i=1,lats_node_r
+        do i=1,nlatLocal
            latInd(i)=global_lats_r(ipt_lats_node_r-1+i)
            total_eles = total_eles + lonsperlar(latInd(i))
            lonsperlat(i) = lonsperlar(latInd(i))
         enddo
 
-        max_nlat = lats_node_r
+        max_nlat = nlatLocal
         call mpp_max(max_nlat)
         allocate( itmp(max_nlat*mpp_npes()) )
         allocate( itmpLocal(max_nlat) )
@@ -206,8 +221,8 @@ module gfs_diag_manager_mod
 
         allocate(nlevs(2,max_nlevs))
 
-        call set_gfs_diag_manager_time(clock)
-        diag_active = .false. ! this is needed because of initial filtering in gfs
+        call set_gfs_nc_io_time(clock)
+        diag_active = .false. ! this is needed because of tldfi in gfs
         starttime = currtime
 
         CALL ESMF_ClockGet(clock, stopTime = Time)
@@ -216,9 +231,11 @@ module gfs_diag_manager_mod
 
         time_step = set_time(dt_sec)
 
-        deallocate(xlatf, nlat_in_pes, itmp, itmpLocal)
+        deallocate(xlatf, itmp, itmpLocal)
 
-    end subroutine gfs_diag_manager_init
+        call data_override_init(gfs_domain_in=domain, gfs_lon_in=xlon, gfs_lat_in=xlat)
+
+    end subroutine gfs_nc_io_init
 
 
     subroutine gfs_diag_send_complete()
@@ -226,7 +243,7 @@ module gfs_diag_manager_mod
        call diag_send_complete(time_step)
     end subroutine gfs_diag_send_complete
 
-    integer function register_var(name, long_name, units, range, standard_name, levs)
+    integer function gfs_register_diag_field(name, long_name, units, range, standard_name, levs)
         character (len=*), intent(in) :: name
         character (len=*), intent(in), optional :: long_name, units
         real, intent(in), optional :: range(2)
@@ -238,17 +255,17 @@ module gfs_diag_manager_mod
 
         if (gfs_io_pe) return
         if (.not.present(levs)) then
-            register_var = register_diag_field('gfs', trim(name), (/lon_id, lat_id/), starttime, &
+            gfs_register_diag_field = register_diag_field('gfs', trim(name), (/lon_id, lat_id/), starttime, &
                 long_name=long_name, units=units, range=range, standard_name=standard_name)
         else
             lev_id = get_level_id(levs)
-            register_var = register_diag_field('gfs', trim(name), (/lon_id, lat_id, lev_id/), starttime, &
+            gfs_register_diag_field = register_diag_field('gfs', trim(name), (/lon_id, lat_id, lev_id/), starttime, &
                 long_name=long_name, units=units, range=range, standard_name=standard_name)
         endif
 
-    end function register_var
+    end function gfs_register_diag_field
 
-    integer function register_static(name, long_name, units, range, standard_name, levs)
+    integer function gfs_register_static_field(name, long_name, units, range, standard_name, levs)
       character (len=*), intent(in) :: name
       character (len=*), intent(in), optional :: long_name, units
       real, intent(in), optional :: range(2)
@@ -259,15 +276,15 @@ module gfs_diag_manager_mod
 
       if (gfs_io_pe) return
       if (.not.present(levs)) then
-         register_static = register_static_field('gfs', trim(name), (/lon_id, lat_id/), &
+         gfs_register_static_field = register_static_field('gfs', trim(name), (/lon_id, lat_id/), &
               long_name=long_name, units=units, range=range, standard_name=standard_name)
       else
          lev_id = get_level_id(levs)
-         register_static = register_static_field('gfs', trim(name), (/lon_id, lat_id, lev_id/), &
+         gfs_register_static_field = register_static_field('gfs', trim(name), (/lon_id, lat_id, lev_id/), &
               long_name=long_name, units=units, range=range, standard_name=standard_name)
       endif
 
-    end function register_static
+    end function gfs_register_static_field
 
 
     subroutine update_opdata_2d_o(field_id, field, istrt, im, lan)
@@ -305,8 +322,8 @@ module gfs_diag_manager_mod
       logical :: used
       integer :: k, is, ie
 
-        if (gfs_io_pe) return
-        if (.not. diag_active) return
+      if (gfs_io_pe) return
+      if (.not. diag_active) return
       if (field_id<=0) return
 
       is = istrt
@@ -404,10 +421,10 @@ module gfs_diag_manager_mod
         n_fields=n_fields+1
         if (n_fields > max_fields) call handle_error(fatal, 'gfs_diag_manager_mod: n_fields>max_fields')
         if (present(static) .and. static) then
-            field_ids(n_fields)%id = register_static(name, long_name=long_name, units=units, &
+            field_ids(n_fields)%id = gfs_register_static_field(name, long_name=long_name, units=units, &
                         range=range, standard_name=standard_name, levs=levs)
         else
-            field_ids(n_fields)%id = register_var(name, long_name=long_name, units=units, &
+            field_ids(n_fields)%id = gfs_register_diag_field(name, long_name=long_name, units=units, &
                         range=range, standard_name=standard_name, levs=levs)
         endif
         field_ids(n_fields)%name = name
@@ -431,7 +448,7 @@ module gfs_diag_manager_mod
           enddo
 
           n_nlevs=n_nlevs+1
-          if (n_nlevs > max_nlevs) call handle_error(fatal, 'register_var: n_nlevs>max_nlevs, increase max_nlevs!')
+          if (n_nlevs > max_nlevs) call handle_error(fatal, 'gfs_register_diag_field: n_nlevs>max_nlevs, increase max_nlevs!')
           nlevs(1,n_nlevs) = levs
           write(tmp,*) levs
           tmp=trim(adjustl(tmp))
@@ -441,9 +458,74 @@ module gfs_diag_manager_mod
 
     end function get_level_id
 
-    subroutine gfs_diag_manager_end()
+    subroutine gfs_nc_io_end()
       if (gfs_io_pe) return
       call diag_manager_end(currtime)
-    end subroutine gfs_diag_manager_end
+    end subroutine gfs_nc_io_end
 
-end module gfs_diag_manager_mod
+    subroutine gfs_data_override0d(field_name, field, override)
+        character(len=*), intent(in) :: field_name
+        real, intent(out) :: field
+        logical, intent(out), optional :: override
+
+        if (gfs_io_pe) return
+        call data_override('GFS', field_name, field, time=currtime, override=override)
+            
+    end subroutine gfs_data_override0d
+
+    subroutine gfs_data_override2d_o(field_name, field, istrt, im, lan, override)
+        character(len=*), intent(in) :: field_name
+        real, intent(out), dimension(:) :: field
+        integer, intent(in) :: istrt, im, lan
+        logical, intent(out), optional :: override
+
+        integer :: is, ie, js, je
+        real :: field1(size(field,1),1)
+
+        if (gfs_io_pe) return
+        is = istrt; ie = istrt+im-1; js = lan; je = lan
+
+        call data_override('GFS', field_name, field1, time=currtime, override=override, &
+                is_in=is, ie_in=ie, js_in=js, je_in=je)
+
+        field = field1(:,1) 
+    end subroutine gfs_data_override2d_o
+
+    subroutine gfs_data_override3d_o(field_name, field, istrt, im, lan, override)
+        character(len=*), intent(in) :: field_name
+        real, intent(out), dimension(:,:) :: field
+        integer, intent(in) :: istrt, im, lan
+        logical, intent(out), optional :: override
+
+        integer :: is, ie, js, je
+        real :: field1(size(field,1),1,size(field,2))
+
+        if (gfs_io_pe) return
+        is = istrt; ie = istrt+im-1; js = lan; je = lan
+
+        call data_override('GFS', field_name, field1, time=currtime, override=override, &
+                is_in=is, ie_in=ie, js_in=js, je_in=je)
+        field = field1(:,1,:) 
+    end subroutine gfs_data_override3d_o
+
+    subroutine gfs_data_override2d(field_name, data_2d, override)
+        character(len=*), intent(in) :: field_name
+        real, intent(inout), dimension(:,:) :: data_2d
+        logical, intent(out), optional :: override
+
+        if (gfs_io_pe) return
+        call data_override('GFS', field_name, data_2d, time=currtime, override=override)
+            
+    end subroutine gfs_data_override2d
+
+    subroutine gfs_data_override3d(field_name, field, override)
+        character(len=*), intent(in) :: field_name
+        real, intent(out), dimension(:,:,:) :: field
+        logical, intent(out), optional :: override
+
+        if (gfs_io_pe) return
+        call data_override('GFS', field_name, field, time=currtime, override=override)
+
+    end subroutine gfs_data_override3d
+
+end module gfs_nc_io_mod
