@@ -186,11 +186,11 @@ module gfs_nc_io_mod
 
         lon_id = diag_axis_init(name='lon', data=xlonf(:)*RAD_TO_DEG, &
                    units='degrees_east' , cart_name='X', long_name='longitude', domain2=domain)
-        !call diag_axis_add_attribute(lon_id, 'lonsperlat', lonsperlat)
+        call diag_axis_add_attribute(lon_id, 'lonsperlat', lonsperlat)
 
         lat_id = diag_axis_init(name='lat', data=xlatf(:)*RAD_TO_DEG, &
                    units='degrees_north' , cart_name='Y', long_name='latitude', domain2=domain)
-        !call diag_axis_add_attribute(lat_id, 'decomp_gfs', latInd)
+        call diag_axis_add_attribute(lat_id, 'decomp_gfs', latInd)
 
 
         allocate(nlevs(2,max_nlevs))
