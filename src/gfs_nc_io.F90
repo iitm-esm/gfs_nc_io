@@ -1,5 +1,6 @@
 module gfs_nc_io_mod
 
+
     use fms, only: handle_error=>mpp_error, FATAL, WARNING, NOTE, &
             mpp_pe, mpp_root_pe, fms_init, mpp_gather, mpp_alltoall, &
             mpp_get_compute_domain, diag_axis_add_attribute, mpp_max, &
@@ -228,12 +229,15 @@ module gfs_nc_io_mod
 
         if (gfs_io_pe) return
         if (.not.present(levs)) then
-            gfs_register_diag_field = register_diag_field('gfs', trim(name), (/lon_id, lat_id/), starttime, &
-                long_name=long_name, units=units, range=range, standard_name=standard_name)
+            gfs_register_diag_field = register_diag_field('gfs', trim(name), &
+                (/lon_id, lat_id/), starttime, long_name=long_name, &
+                units=units, range=range, standard_name=standard_name, total_elements=total_eles)
         else
             lev_id = get_level_id(levs)
-            gfs_register_diag_field = register_diag_field('gfs', trim(name), (/lon_id, lat_id, lev_id/), starttime, &
-                long_name=long_name, units=units, range=range, standard_name=standard_name)
+            gfs_register_diag_field = register_diag_field('gfs', trim(name), &
+                (/lon_id, lat_id, lev_id/), starttime, &
+                long_name=long_name, units=units, range=range, &
+                standard_name=standard_name, total_elements=total_eles*levs)
         endif
 
     end function gfs_register_diag_field
@@ -250,11 +254,11 @@ module gfs_nc_io_mod
       if (gfs_io_pe) return
       if (.not.present(levs)) then
          gfs_register_static_field = register_static_field('gfs', trim(name), (/lon_id, lat_id/), &
-              long_name=long_name, units=units, range=range, standard_name=standard_name)
+              long_name=long_name, units=units, range=range, standard_name=standard_name, total_elements=total_eles)
       else
          lev_id = get_level_id(levs)
          gfs_register_static_field = register_static_field('gfs', trim(name), (/lon_id, lat_id, lev_id/), &
-              long_name=long_name, units=units, range=range, standard_name=standard_name)
+              long_name=long_name, units=units, range=range, standard_name=standard_name, total_elements=total_eles*levs)
       endif
 
     end function gfs_register_static_field
@@ -282,6 +286,7 @@ module gfs_nc_io_mod
             endif
         enddo
 
+!$omp single
         n_fields=n_fields+1
         if (n_fields > max_fields) call handle_error(fatal, 'gfs_diag_manager_mod: n_fields>max_fields')
         if (present(static) .and. static) then
@@ -292,6 +297,7 @@ module gfs_nc_io_mod
                         range=range, standard_name=standard_name, levs=levs)
         endif
         field_ids(n_fields)%name = name
+!$omp end single
         get_field_id = field_ids(n_fields)%id
 
     end function get_field_id

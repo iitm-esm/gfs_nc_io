@@ -71,9 +71,10 @@
         if (.not. present(id) .and. .not. present(name) ) call handle_error(fatal, 'gfs_diag_manager: both id and name not present for field')
 
         if (present(id).and.(id>0)) then
-            used = send_data(field_id, field1, currtime, is_in=is, ie_in=ie, js_in=js, je_in=je)
+            used = send_data(field_id, field1, currtime, is_in=is, js_in=js)
             return
         endif
+
 
 #ifdef LEVS_
             field1(:,1,:) = field(:,:)
@@ -85,7 +86,6 @@
             field_id = get_field_id(name, static=static, long_name=long_name, units=units, &
                             range=range, standard_name=standard_name)
 #endif
-
-        used = send_data(field_id, field1, currtime, is_in=is, ie_in=ie, js_in=js, je_in=je)
+        used = send_data(field_id, field1, currtime, is_in=is, js_in=js)
 
     end subroutine O_UPDATE_OPDATA_
