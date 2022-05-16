@@ -183,40 +183,13 @@ module gfs_nc_io_mod
            lonsperlat(i) = lonsperlar(latInd(i))
         enddo
 
-        max_nlat = nlatLocal
-        call mpp_max(max_nlat)
-        allocate( itmp(max_nlat*mpp_npes()) )
-        allocate( itmpLocal(max_nlat) )
-        
-        itmpLocal = -999
-        itmpLocal(1:size(latInd,1)) = latInd(:)
-        call mpp_gather(itmpLocal,itmp)
-        call mpp_broadcast(itmp,size(itmp,1),mpp_root_pe())
-
-        j = 1
-        do i = 1, size(itmp)
-            if (itmp(i)==-999) cycle
-            latIndGlobal(j) = itmp(i)
-            j = j + 1
-        end do 
-
-        itmpLocal = -999
-        itmpLocal(1:size(lonsperlat,1)) = lonsperlat(:)
-        call mpp_gather(itmpLocal,itmp)
-        call mpp_broadcast(itmp,size(itmp,1),mpp_root_pe())
-        j = 1
-        do i = 1, size(itmp)
-            if (itmp(i)==-999) cycle
-            lonsperlatGlobal(j) = itmp(i)
-            j = j + 1
-        end do 
-
         lon_id = diag_axis_init(name='lon', data=xlonf(:)*RAD_TO_DEG, &
                    units='degrees_east' , cart_name='X', long_name='longitude', domain2=domain)
-        call diag_axis_add_attribute(lon_id, 'lonsperlat', lonsperlatGlobal)
+        call diag_axis_add_attribute(lon_id, 'lonsperlat', lonsperlat)
+
         lat_id = diag_axis_init(name='lat', data=xlatf(:)*RAD_TO_DEG, &
                    units='degrees_north' , cart_name='Y', long_name='latitude', domain2=domain)
-        call diag_axis_add_attribute(lat_id, 'decomp_gfs', latIndGlobal)
+        call diag_axis_add_attribute(lat_id, 'decomp_gfs', latInd)
 
 
         allocate(nlevs(2,max_nlevs))
@@ -231,7 +204,7 @@ module gfs_nc_io_mod
 
         time_step = set_time(dt_sec)
 
-        deallocate(xlatf, itmp, itmpLocal)
+        deallocate(xlatf)
 
         call data_override_init(gfs_domain_in=domain, gfs_lon_in=xlon, gfs_lat_in=xlat)
 
@@ -286,117 +259,8 @@ module gfs_nc_io_mod
 
     end function gfs_register_static_field
 
-
-    subroutine update_opdata_2d_o(field_id, field, istrt, im, lan)
-      integer, intent(in) :: field_id
-      real, intent(in) :: field(:)
-      integer, intent(in) :: lan, istrt, im
-
-      !local
-      real :: field1(im,1)
-      real :: wgt1(im,1)
-      logical :: mask(im,1)
-      logical :: used
-      integer :: is, ie 
-
-        if (gfs_io_pe) return
-        if (.not. diag_active) return
-      if (field_id<=0) return
-
-      is = istrt
-      ie = is+im-1
-
-      field1(1:im,1)=field(:)
-
-      used = send_data(field_id, field1(:,:), currtime, js_in=lan, je_in=lan, is_in=is, ie_in=ie)
-    end subroutine update_opdata_2d_o
-
-    subroutine update_opdata_3d_o(field_id, field, istrt, im, lan)
-      integer, intent(in) :: field_id
-      real, intent(in) :: field(:,:)
-      integer, intent(in) :: lan, im, istrt
-      !local
-      real :: field2(im,1,size(field,2))
-      real :: wgt1(im,1,size(field,2))
-      logical :: mask(im,1,size(field,2))
-      logical :: used
-      integer :: k, is, ie
-
-      if (gfs_io_pe) return
-      if (.not. diag_active) return
-      if (field_id<=0) return
-
-      is = istrt
-      ie = is+im-1
-
-      field2(1:im,1,:) = field(:,:)
-
-      used = send_data(field_id, field2(:,:,:), currtime, js_in=lan, je_in=lan, is_in=is, ie_in=ie)
-    end subroutine update_opdata_3d_o
-
-    subroutine update_opdata_2d(field, id, name, static, long_name, units, range, standard_name)
-        real, intent(in) :: field(:,:)
-        integer, intent(in), optional :: id
-        character (len=*), intent(in), optional :: name
-        character (len=*), intent(in), optional :: long_name, units
-        real, intent(in), optional :: range(2)
-        character (len=*), intent(in), optional :: standard_name
-        logical, intent(in), optional :: static
-
-        !local
-        logical :: used
-        integer :: field_id
-
-        if (gfs_io_pe) return
-        if (.not. diag_active) return
-
-        if (present(id).and.(id<=0)) return
-        if (.not. present(id) .and. .not. present(name) ) call handle_error(fatal, 'gfs_diag_manager: both id and name not present for field')
-
-        if (present(id).and.(id>0)) then
-            used = send_data(id, field(:,:), currtime)
-            return
-        endif
-
-        field_id = get_field_id(name, static=static, long_name=long_name, units=units, &
-                        range=range, standard_name=standard_name)
-
-        used = send_data(field_id, field(:,:), currtime)
-
-    end subroutine update_opdata_2d
-
-
-    subroutine update_opdata_3d(field, id, name, static, long_name, units, range, standard_name)
-        real, intent(in) :: field(:,:,:)
-        integer, intent(in), optional :: id
-        character (len=*), intent(in), optional:: name
-        character (len=*), intent(in), optional :: long_name, units
-        real, intent(in), optional :: range(2)
-        character (len=*), intent(in), optional :: standard_name
-        logical, intent(in), optional :: static
-
-        !local
-        logical :: used
-        integer :: field_id
-        integer :: levs
-
-        if (gfs_io_pe) return
-        if (.not. diag_active) return
-
-        if (present(id).and.(id<=0)) return
-        if (.not. present(id) .and. .not. present(name) ) call handle_error(fatal, 'gfs_diag_manager: both id and name not present for field')
-
-        if (present(id).and.(id>0)) then
-            used = send_data(id, field(:,:,:), currtime)
-            return
-        endif
-
-        levs = size(field,3)
-        field_id = get_field_id(name, static=static, long_name=long_name, units=units, &
-                        range=range, standard_name=standard_name, levs=levs)
-        used = send_data(id, field(:,:,:), currtime)
-
-    end subroutine update_opdata_3d
+#include <update_opdata.inc>
+#include <data_override.inc>
 
     function get_field_id(name, static, long_name, units, range, standard_name, levs)
         character (len=*), intent(in) :: name
@@ -462,70 +326,5 @@ module gfs_nc_io_mod
       if (gfs_io_pe) return
       call diag_manager_end(currtime)
     end subroutine gfs_nc_io_end
-
-    subroutine gfs_data_override0d(field_name, field, override)
-        character(len=*), intent(in) :: field_name
-        real, intent(out) :: field
-        logical, intent(out), optional :: override
-
-        if (gfs_io_pe) return
-        call data_override('GFS', field_name, field, time=currtime, override=override)
-            
-    end subroutine gfs_data_override0d
-
-    subroutine gfs_data_override2d_o(field_name, field, istrt, im, lan, override)
-        character(len=*), intent(in) :: field_name
-        real, intent(out), dimension(:) :: field
-        integer, intent(in) :: istrt, im, lan
-        logical, intent(out), optional :: override
-
-        integer :: is, ie, js, je
-        real :: field1(size(field,1),1)
-
-        if (gfs_io_pe) return
-        is = istrt; ie = istrt+im-1; js = lan; je = lan
-
-        call data_override('GFS', field_name, field1, time=currtime, override=override, &
-                is_in=is, ie_in=ie, js_in=js, je_in=je)
-
-        field = field1(:,1) 
-    end subroutine gfs_data_override2d_o
-
-    subroutine gfs_data_override3d_o(field_name, field, istrt, im, lan, override)
-        character(len=*), intent(in) :: field_name
-        real, intent(out), dimension(:,:) :: field
-        integer, intent(in) :: istrt, im, lan
-        logical, intent(out), optional :: override
-
-        integer :: is, ie, js, je
-        real :: field1(size(field,1),1,size(field,2))
-
-        if (gfs_io_pe) return
-        is = istrt; ie = istrt+im-1; js = lan; je = lan
-
-        call data_override('GFS', field_name, field1, time=currtime, override=override, &
-                is_in=is, ie_in=ie, js_in=js, je_in=je)
-        field = field1(:,1,:) 
-    end subroutine gfs_data_override3d_o
-
-    subroutine gfs_data_override2d(field_name, data_2d, override)
-        character(len=*), intent(in) :: field_name
-        real, intent(inout), dimension(:,:) :: data_2d
-        logical, intent(out), optional :: override
-
-        if (gfs_io_pe) return
-        call data_override('GFS', field_name, data_2d, time=currtime, override=override)
-            
-    end subroutine gfs_data_override2d
-
-    subroutine gfs_data_override3d(field_name, field, override)
-        character(len=*), intent(in) :: field_name
-        real, intent(out), dimension(:,:,:) :: field
-        logical, intent(out), optional :: override
-
-        if (gfs_io_pe) return
-        call data_override('GFS', field_name, field, time=currtime, override=override)
-
-    end subroutine gfs_data_override3d
 
 end module gfs_nc_io_mod
