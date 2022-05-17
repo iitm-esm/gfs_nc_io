@@ -20,7 +20,7 @@
         if (present(id).and.(id<=0)) return
         if (.not. present(id) .and. .not. present(name) ) call handle_error(fatal, 'gfs_diag_manager: both id and name not present for field')
 
-        if (present(id).and.(id>0)) then
+        if (present(id)) then
             used = send_data(id, field, currtime)
             return
         endif
@@ -53,6 +53,7 @@
         !local
         logical :: used
         integer :: field_id, is, ie, js, je, levs
+        integer :: omp_get_thread_num, omp_get_num_threads
 
 #ifdef LEVS_
         real :: field1(1:im,1,size(field,2))
@@ -60,6 +61,7 @@
         real :: field1(1:im,1)
 #endif
 
+        field_id = -1
         if (gfs_io_pe) return
         if (.not. diag_active) return
 
@@ -70,11 +72,10 @@
         if (present(id).and.(id<=0)) return
         if (.not. present(id) .and. .not. present(name) ) call handle_error(fatal, 'gfs_diag_manager: both id and name not present for field')
 
-        if (present(id).and.(id>0)) then
-            used = send_data(field_id, field1, currtime, is_in=is, js_in=js)
+        if (present(id)) then
+            used = send_data(id, field1, currtime, is_in=is, js_in=js)
             return
         endif
-
 
 #ifdef LEVS_
             field1(:,1,:) = field(:,:)

@@ -20,7 +20,7 @@ module gfs_nc_io_mod
     USE ESMF_Mod, only: ESMF_Time, ESMF_TimeGet, ESMF_Clock, ESMF_ClockGet
 
     use mpi_def, only: icolor, mc_comp, mc_io
-    use layout1, only : ipt_lats_node_r
+    use layout1, only : ipt_lats_node_r, me 
     use coordinate_def, only: ak5, bk5  
 
     implicit none
