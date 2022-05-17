@@ -1,7 +1,7 @@
 
     subroutine O_DATA_OVERRIDE_(field_name, field, istrt, ix, lan, override)
         character(len=*), intent(in) :: field_name
-        real, intent(out), O_DIMENSION_ :: field
+        real, intent(inout), O_DIMENSION_ :: field
         integer, intent(in) :: istrt, ix, lan
         logical, intent(out), optional :: override
 
@@ -15,6 +15,12 @@
 
         im = size(field,1)
         is = istrt; ie = istrt+ix-1; js = lan; je = lan
+
+#ifdef LEVS_
+        field1(1:im,1,:) = field
+#else
+        field1(1:im,1) = field
+#endif
 
         call data_override('GFS', field_name, field1, time=currtime, override=override, &
                 is_in=is, ie_in=ie, js_in=js, je_in=je)

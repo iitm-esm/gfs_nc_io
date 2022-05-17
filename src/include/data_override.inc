@@ -2,13 +2,13 @@
 #undef DATA_OVERRIDE_
 #define DATA_OVERRIDE_ gfs_data_override2d
 #undef DIMENSION_
-#define DIMENSION_ intent(out), dimension(:,:)
+#define DIMENSION_ intent(inout), dimension(:,:)
 #include <data_override.h>
 
 #undef DATA_OVERRIDE_
 #define DATA_OVERRIDE_ gfs_data_override3d
 #undef DIMENSION_
-#define DIMENSION_ intent(out), dimension(:,:,:)
+#define DIMENSION_ intent(inout), dimension(:,:,:)
 #include <data_override.h>
 
 #undef DATA_OVERRIDE_

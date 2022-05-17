@@ -286,6 +286,8 @@ module gfs_nc_io_mod
             endif
         enddo
 
+!$omp barrier
+
 !$omp single
         n_fields=n_fields+1
         if (n_fields > max_fields) call handle_error(fatal, 'gfs_diag_manager_mod: n_fields>max_fields')
@@ -298,6 +300,7 @@ module gfs_nc_io_mod
         endif
         field_ids(n_fields)%name = name
 !$omp end single
+
         get_field_id = field_ids(n_fields)%id
 
     end function get_field_id
